@@ -12,5 +12,5 @@ COPY . .
 # Expose port (Railway uses dynamic PORT)
 EXPOSE 8000
 
-# Run the application (use shell form for Railway's $PORT)
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Run the application (explicit shell for Railway's $PORT)
+CMD ["/bin/sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
