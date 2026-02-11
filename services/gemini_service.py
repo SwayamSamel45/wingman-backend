@@ -109,47 +109,64 @@ async def analyze_screenshot(
         if platform.lower() == "instagram":
             user_prompt += " (emojis are acceptable on Instagram)"
     
-    try:
-        # Configure Gemini API key
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        
-        # Initialize the model
-        model = genai.GenerativeModel(
-            model_name=settings.GEMINI_MODEL,
-            system_instruction=WINGMAN_SYSTEM_PROMPT
-        )
-        
-        # Decode base64 image
-        image_bytes = base64.b64decode(image_base64)
-        
-        # Create the image part for Gemini
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": image_bytes
-        }
-        
-        # Generate response
-        response = model.generate_content(
-            [user_prompt, image_part],
-            generation_config=genai.GenerationConfig(
-                temperature=0.7,
-                max_output_tokens=1000,
+    # Configure Gemini API key
+    genai.configure(api_key=settings.GEMINI_API_KEY)
+    
+    # Initialize the model
+    model = genai.GenerativeModel(
+        model_name=settings.GEMINI_MODEL,
+        system_instruction=WINGMAN_SYSTEM_PROMPT
+    )
+    
+    # Decode base64 image
+    image_bytes = base64.b64decode(image_base64)
+    
+    # Create the image part for Gemini
+    image_part = {
+        "mime_type": "image/jpeg",
+        "data": image_bytes
+    }
+    
+    # Retry with exponential backoff for rate limits
+    import asyncio
+    max_retries = 3
+    
+    for attempt in range(max_retries):
+        try:
+            # Generate response
+            response = model.generate_content(
+                [user_prompt, image_part],
+                generation_config=genai.GenerationConfig(
+                    temperature=0.7,
+                    max_output_tokens=1000,
+                )
             )
-        )
-        
-        # Extract and parse the response
-        content = response.text
-        
-        # Try to extract JSON from the response
-        # Sometimes the model wraps it in markdown code blocks
-        json_match = re.search(r'\{[\s\S]*\}', content)
-        if json_match:
-            result = json.loads(json_match.group())
-            return result
-        else:
-            raise ValueError("No valid JSON found in response")
             
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse AI response as JSON: {str(e)}")
-    except Exception as e:
-        raise Exception(f"Gemini API error: {str(e)}")
+            # Extract and parse the response
+            content = response.text
+            
+            # Try to extract JSON from the response
+            # Sometimes the model wraps it in markdown code blocks
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                result = json.loads(json_match.group())
+                return result
+            else:
+                raise ValueError("No valid JSON found in response")
+                
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Failed to parse AI response as JSON: {str(e)}")
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 15  # 15s, 30s, 45s
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    raise Exception(
+                        "Gemini API rate limit reached. The free tier has limited requests per minute. "
+                        "Please wait 60 seconds and try again."
+                    )
+            raise Exception(f"Analysis failed: {error_str}")
+
